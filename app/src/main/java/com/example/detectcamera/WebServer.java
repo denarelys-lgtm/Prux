@@ -156,6 +156,9 @@ public class WebServer extends NanoHTTPD {
             @Override
             public void close() throws IOException {
                 cerrado = true;
+                synchronized (frameLock) {
+                    frameLock.notifyAll();  // Despierta al hilo que espera para que cierre rápido
+                }
                 super.close();
             }
         };
