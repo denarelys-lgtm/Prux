@@ -98,14 +98,18 @@ public class ScreenSocketClient {
         }
     }
 
+    private boolean esJpeg(byte[] frame) {
+        return frame.length >= 2
+                && (frame[0] & 0xff) == 0xff
+                && (frame[1] & 0xff) == 0xd8;
+    }
+
     private byte[] procesarFrame(byte[] frame) {
         if (frame == null || frame.length == 0) return null;
 
         // Si el daemon ya entrega JPEG con el ancho correcto, no lo
         // decodificamos/recomprimimos: este camino ahorra muchísimo CPU.
-        if (frame.length >= 2
-                && (frame[0] & 0xff) == 0xff
-                && (frame[1] & 0xff) == 0xd8) {
+        if (esJpeg(frame)) {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
             BitmapFactory.decodeByteArray(frame, 0, frame.length, bounds);
@@ -113,6 +117,9 @@ public class ScreenSocketClient {
             if (bounds.outWidth > 0 && bounds.outWidth <= MAX_OUTPUT_WIDTH) {
                 return frame;
             }
+
+            // Si es más grande, lo decodificamos con muestreo para ahorrar memoria
+            return decodificarJpegConMuestreo(frame, bounds.outWidth, bounds.outHeight);
         }
 
         // JPEG/PNG/etc. comprimido.
@@ -130,6 +137,36 @@ public class ScreenSocketClient {
 
         // RAW de screencap.
         return procesarRawFrameAJpeg(frame);
+    }
+
+    private byte[] decodificarJpegConMuestreo(byte[] jpegData, int originalWidth, int originalHeight) {
+        if (originalWidth <= 0 || originalHeight <= 0) return null;
+
+        // Calcula un inSampleSize potencia de 2 para reducir el tamaño de decodificación
+        int inSampleSize = 1;
+        int targetWidth = Math.min(MAX_OUTPUT_WIDTH, originalWidth);
+        while (originalWidth / (inSampleSize * 2) >= targetWidth) {
+            inSampleSize *= 2;
+        }
+
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = inSampleSize;
+        options.inPreferredConfig = Bitmap.Config.RGB_565;
+
+        Bitmap bitmap = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.length, options);
+        if (bitmap == null) return null;
+
+        try {
+            // Si aún es más ancho que el máximo, se escala al tamaño exacto
+            if (bitmap.getWidth() > MAX_OUTPUT_WIDTH) {
+                return convertirBitmapAJpeg(bitmap);
+            } else {
+                // Ya tiene un tamaño adecuado, solo comprimir
+                return convertirBitmapAJpeg(bitmap);
+            }
+        } finally {
+            if (!bitmap.isRecycled()) bitmap.recycle();
+        }
     }
 
     private byte[] procesarRawFrameAJpeg(byte[] rawFrame) {
